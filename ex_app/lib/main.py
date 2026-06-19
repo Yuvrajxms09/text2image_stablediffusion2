@@ -19,6 +19,11 @@ from nc_py_api import NextcloudApp, NextcloudException
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, get_computation_device, run_app, set_handlers
 from nc_py_api.ex_app.providers.task_processing import ShapeDescriptor, ShapeType, TaskProcessingProvider
 
+try:
+    from compel import CompelForSDXL
+except ImportError:
+    CompelForSDXL = None
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -34,6 +39,26 @@ def log(nc, level, content):
 
 TASKPROCESSING_PROVIDER_ID_BASIC = 'text2image_stablediffusion2:sdxl_turbo'
 TASKPROCESSING_PROVIDER_ID_ENHANCED = 'text2image_stablediffusion2:sdxl_turbo_enhanced'
+
+
+class PromptEncoder:
+    def __init__(self, pipe, device: str):
+        self._enabled = CompelForSDXL is not None
+        self._compel = CompelForSDXL(pipe, device=device) if self._enabled else None
+        if self._enabled:
+            log(None, LogLvl.INFO, "Compel is active for long-prompt conditioning.")
+        else:
+            log(None, LogLvl.INFO, "Compel is not available; falling back to prompt truncation.")
+
+    def build(self, prompt: str):
+        if self._compel is None:
+            return None
+
+        conditioning = self._compel(prompt)
+        return {
+            "prompt_embeds": conditioning.embeds,
+            "pooled_prompt_embeds": conditioning.pooled_embeds,
+        }
 
 def load_model():
     if get_computation_device().lower() == 'cuda':
@@ -150,6 +175,7 @@ def background_thread_task():
         sleep(5)
 
     pipe = load_model()
+    prompt_encoder = PromptEncoder(pipe, device="cuda" if get_computation_device().lower() == "cuda" else "cpu")
 
     while True:
         if not app_enabled.is_set() or pipe is None:
@@ -221,16 +247,22 @@ def background_thread_task():
             width = int(width)
             height = int(height)
             inference_steps = int(os.getenv('NUM_INFERENCE_STEPS', 4))
-            images: List[PIL.Image.Image] = pipe(
-                width=width,
-                height=height,
-                prompt=prompt,
-                num_inference_steps=inference_steps,
-                guidance_scale=0.0,
-                num_images_per_prompt=task.get("input").get('numberOfImages'),
-                callback_on_step_end=lambda diffusion, step, timestep, _, **kwargs:
+            generation_kwargs = {
+                "width": width,
+                "height": height,
+                "num_inference_steps": inference_steps,
+                "guidance_scale": 0.0,
+                "num_images_per_prompt": task.get("input").get('numberOfImages'),
+                "callback_on_step_end": lambda diffusion, step, timestep, _, **kwargs:
                     NextcloudApp().providers.task_processing.set_progress(task.get('id'), (step+1) / inference_steps * (100 - progress) + progress)
-            ).images
+            }
+            conditioning = prompt_encoder.build(prompt)
+            if conditioning is None:
+                generation_kwargs["prompt"] = prompt
+            else:
+                generation_kwargs.update(conditioning)
+
+            images: List[PIL.Image.Image] = pipe(**generation_kwargs).images
             log(nc, LogLvl.INFO, f"image generated: {perf_counter() - time_start}s")
 
             img_ids = []
