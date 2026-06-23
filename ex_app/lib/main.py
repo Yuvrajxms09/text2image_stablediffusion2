@@ -41,24 +41,14 @@ TASKPROCESSING_PROVIDER_ID_BASIC = 'text2image_stablediffusion2:sdxl_turbo'
 TASKPROCESSING_PROVIDER_ID_ENHANCED = 'text2image_stablediffusion2:sdxl_turbo_enhanced'
 
 
-class PromptEncoder:
-    def __init__(self, pipe, device: str):
-        self._enabled = CompelForSDXL is not None
-        self._compel = CompelForSDXL(pipe, device=device) if self._enabled else None
-        if self._enabled:
-            log(None, LogLvl.INFO, "Compel is active for long-prompt conditioning.")
-        else:
-            log(None, LogLvl.INFO, "Compel is not available; falling back to prompt truncation.")
+def init_sdxl_compel(pipe, device: str):
+    if CompelForSDXL is None:
+        logger.info("compel is not available; using raw prompt fallback")
+        return None
 
-    def build(self, prompt: str):
-        if self._compel is None:
-            return None
+    logger.info("compel is active for long prompt conditioning")
+    return CompelForSDXL(pipe, device=device)
 
-        conditioning = self._compel(prompt)
-        return {
-            "prompt_embeds": conditioning.embeds,
-            "pooled_prompt_embeds": conditioning.pooled_embeds,
-        }
 
 def load_model():
     if get_computation_device().lower() == 'cuda':
@@ -175,7 +165,8 @@ def background_thread_task():
         sleep(5)
 
     pipe = load_model()
-    prompt_encoder = PromptEncoder(pipe, device="cuda" if get_computation_device().lower() == "cuda" else "cpu")
+    device = "cuda" if get_computation_device().lower() == "cuda" else "cpu"
+    compel = init_sdxl_compel(pipe, device=device)
 
     while True:
         if not app_enabled.is_set() or pipe is None:
@@ -256,11 +247,12 @@ def background_thread_task():
                 "callback_on_step_end": lambda diffusion, step, timestep, _, **kwargs:
                     NextcloudApp().providers.task_processing.set_progress(task.get('id'), (step+1) / inference_steps * (100 - progress) + progress)
             }
-            conditioning = prompt_encoder.build(prompt)
-            if conditioning is None:
+            if compel is None:
                 generation_kwargs["prompt"] = prompt
             else:
-                generation_kwargs.update(conditioning)
+                conditioning = compel(prompt)
+                generation_kwargs["prompt_embeds"] = conditioning.embeds
+                generation_kwargs["pooled_prompt_embeds"] = conditioning.pooled_embeds
 
             images: List[PIL.Image.Image] = pipe(**generation_kwargs).images
             log(nc, LogLvl.INFO, f"image generated: {perf_counter() - time_start}s")
