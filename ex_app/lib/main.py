@@ -238,7 +238,7 @@ def background_thread_task():
             width = int(width)
             height = int(height)
             inference_steps = int(os.getenv('NUM_INFERENCE_STEPS', 4))
-            generation_kwargs = {
+            common_kwargs = {
                 "width": width,
                 "height": height,
                 "num_inference_steps": inference_steps,
@@ -248,13 +248,17 @@ def background_thread_task():
                     NextcloudApp().providers.task_processing.set_progress(task.get('id'), (step+1) / inference_steps * (100 - progress) + progress)
             }
             if compel is None:
-                generation_kwargs["prompt"] = prompt
+                images: List[PIL.Image.Image] = pipe(
+                    prompt=prompt,
+                    **common_kwargs,
+                ).images
             else:
                 conditioning = compel(prompt)
-                generation_kwargs["prompt_embeds"] = conditioning.embeds
-                generation_kwargs["pooled_prompt_embeds"] = conditioning.pooled_embeds
-
-            images: List[PIL.Image.Image] = pipe(**generation_kwargs).images
+                images: List[PIL.Image.Image] = pipe(
+                    prompt_embeds=conditioning.embeds,
+                    pooled_prompt_embeds=conditioning.pooled_embeds,
+                    **common_kwargs,
+                ).images
             log(nc, LogLvl.INFO, f"image generated: {perf_counter() - time_start}s")
 
             img_ids = []
