@@ -18,11 +18,7 @@ from fastapi import FastAPI
 from nc_py_api import NextcloudApp, NextcloudException
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, get_computation_device, run_app, set_handlers
 from nc_py_api.ex_app.providers.task_processing import ShapeDescriptor, ShapeType, TaskProcessingProvider
-
-try:
-    from compel import CompelForSDXL
-except ImportError:
-    CompelForSDXL = None
+from compel_support import build_prompt_conditioning, init_sdxl_compel
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
@@ -39,15 +35,6 @@ def log(nc, level, content):
 
 TASKPROCESSING_PROVIDER_ID_BASIC = 'text2image_stablediffusion2:sdxl_turbo'
 TASKPROCESSING_PROVIDER_ID_ENHANCED = 'text2image_stablediffusion2:sdxl_turbo_enhanced'
-
-
-def init_sdxl_compel(pipe, device: str):
-    if CompelForSDXL is None:
-        logger.info("compel is not available; using raw prompt fallback")
-        return None
-
-    logger.info("compel is active for long prompt conditioning")
-    return CompelForSDXL(pipe, device=device)
 
 
 def load_model():
@@ -247,13 +234,13 @@ def background_thread_task():
                 "callback_on_step_end": lambda diffusion, step, timestep, _, **kwargs:
                     NextcloudApp().providers.task_processing.set_progress(task.get('id'), (step+1) / inference_steps * (100 - progress) + progress)
             }
-            if compel is None:
+            conditioning = build_prompt_conditioning(prompt, compel)
+            if conditioning is None:
                 images: List[PIL.Image.Image] = pipe(
                     prompt=prompt,
                     **common_kwargs,
                 ).images
             else:
-                conditioning = compel(prompt)
                 images: List[PIL.Image.Image] = pipe(
                     prompt_embeds=conditioning.embeds,
                     pooled_prompt_embeds=conditioning.pooled_embeds,
