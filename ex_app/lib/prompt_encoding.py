@@ -100,17 +100,29 @@ def _build_token_chunks(
     ]
     payloads.extend([[] for _ in range(chunk_count - len(payloads))])
 
-    return [
-        tokenizer.prepare_for_model(
-            payload,
-            add_special_tokens=True,
-            max_length=tokenizer.model_max_length,
-            padding="max_length",
-            truncation=True,
-            return_attention_mask=False,
-        )["input_ids"]
-        for payload in payloads
-    ]
+    chunks = []
+    for payload in payloads:
+        if hasattr(tokenizer, "build_inputs_with_special_tokens"):
+            chunk = tokenizer.build_inputs_with_special_tokens(payload)
+            if len(chunk) > tokenizer.model_max_length:
+                raise ValueError("Prompt chunk exceeds the tokenizer model maximum length")
+            chunk = chunk + [tokenizer.pad_token_id] * (tokenizer.model_max_length - len(chunk))
+        else:
+            chunk_text = tokenizer.decode(
+                payload,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            chunk = tokenizer(
+                chunk_text,
+                add_special_tokens=True,
+                max_length=tokenizer.model_max_length,
+                padding="max_length",
+                truncation=True,
+                return_attention_mask=False,
+            )["input_ids"]
+        chunks.append(chunk)
+    return chunks
 
 
 def _encode_token_chunks(
