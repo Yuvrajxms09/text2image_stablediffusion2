@@ -50,20 +50,20 @@ class _FakeTokenizer:
 
 
 class _EncoderOutput:
-    def __init__(self, hidden_states, first_output):
+    def __init__(self, hidden_states, pooled_output):
         self.hidden_states = hidden_states
-        self.first_output = first_output
+        self.pooled_output = pooled_output
 
     def __getitem__(self, index):
         if index != 0:
             raise IndexError(index)
-        return self.first_output
+        return self.pooled_output
 
 
 class _FakeTextEncoder:
-    def __init__(self, embedding_size, returns_pooled_output=False):
+    def __init__(self, embedding_size, has_pooled_output=False):
         self.embedding_size = embedding_size
-        self.returns_pooled_output = returns_pooled_output
+        self.has_pooled_output = has_pooled_output
         self.dtype = torch.float32
         self.input_ids = []
 
@@ -71,21 +71,21 @@ class _FakeTextEncoder:
         self.input_ids.extend(input_ids.detach().cpu().tolist())
         hidden_state = input_ids.to(torch.float32).unsqueeze(-1)
         hidden_state = hidden_state.repeat(1, 1, self.embedding_size)
-        first_output = hidden_state.sum(dim=1) if self.returns_pooled_output else hidden_state
+        pooled_output = hidden_state.sum(dim=1) if self.has_pooled_output else hidden_state
         return _EncoderOutput(
             hidden_states=(hidden_state - 1, hidden_state, hidden_state + 1),
-            first_output=first_output,
+            pooled_output=pooled_output,
         )
 
 
 class _FakePipeline:
     def __init__(self, tokenizer_2=None):
         self.tokenizer = _FakeTokenizer()
-        self.tokenizer_2 = tokenizer_2 or _FakeTokenizer()
+        self.tokenizer_2 = tokenizer_2 if tokenizer_2 is not None else _FakeTokenizer()
         self.text_encoder = _FakeTextEncoder(embedding_size=2)
         self.text_encoder_2 = _FakeTextEncoder(
             embedding_size=3,
-            returns_pooled_output=True,
+            has_pooled_output=True,
         )
 
 

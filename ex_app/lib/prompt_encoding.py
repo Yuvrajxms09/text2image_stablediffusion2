@@ -18,37 +18,35 @@ class PromptConditioning:
 
 @torch.no_grad()
 def encode_sdxl_prompt(pipe: Any, prompt: str, device: str) -> PromptConditioning:
-    tokenizers = (pipe.tokenizer, pipe.tokenizer_2)
-    text_encoders = (pipe.text_encoder, pipe.text_encoder_2)
-    token_ids = [_tokenize_prompt(tokenizer, prompt) for tokenizer in tokenizers]
+    tokenizer = pipe.tokenizer
+    tokenizer_2 = pipe.tokenizer_2
+    prompt_tokens = _tokenize_prompt(tokenizer, prompt)
+    prompt_tokens_2 = _tokenize_prompt(tokenizer_2, prompt)
     chunk_count = max(
-        _required_chunk_count(tokenizer, ids) for tokenizer, ids in zip(tokenizers, token_ids, strict=True)
+        _required_chunk_count(tokenizer, prompt_tokens),
+        _required_chunk_count(tokenizer_2, prompt_tokens_2),
     )
 
-    prompt_embeds = []
-    pooled_prompt_embeds = None
-    for tokenizer, text_encoder, ids in zip(
-        tokenizers,
-        text_encoders,
-        token_ids,
-        strict=True,
-    ):
-        chunks = _build_token_chunks(tokenizer, ids, chunk_count)
-        encoder_embeds, encoder_pooled_embeds = _encode_token_chunks(
-            text_encoder,
-            chunks,
-            device,
-        )
-        prompt_embeds.append(encoder_embeds)
-        if encoder_pooled_embeds is not None:
-            pooled_prompt_embeds = encoder_pooled_embeds
+    first_chunks = _build_token_chunks(tokenizer, prompt_tokens, chunk_count)
+    second_chunks = _build_token_chunks(tokenizer_2, prompt_tokens_2, chunk_count)
+    first_prompt_embeds = _encode_token_chunks(
+        pipe.text_encoder,
+        first_chunks,
+        device,
+    )
+    second_prompt_embeds, pooled_prompt_embeds = _encode_token_chunks(
+        pipe.text_encoder_2,
+        second_chunks,
+        device,
+        return_pooled=True,
+    )
 
     if pooled_prompt_embeds is None:
         raise RuntimeError("SDXL text encoders did not return pooled prompt embeddings")
 
     dtype = pipe.text_encoder_2.dtype
     conditioning = PromptConditioning(
-        prompt_embeds=torch.cat(prompt_embeds, dim=-1).to(device=device, dtype=dtype),
+        prompt_embeds=torch.cat((first_prompt_embeds, second_prompt_embeds), dim=-1).to(device=device, dtype=dtype),
         pooled_prompt_embeds=pooled_prompt_embeds.to(device=device, dtype=dtype),
     )
     log_level = logging.INFO if chunk_count > 1 else logging.DEBUG
@@ -56,8 +54,8 @@ def encode_sdxl_prompt(pipe: Any, prompt: str, device: str) -> PromptConditionin
         log_level,
         "Encoded SDXL prompt: token_counts=%s model_max_lengths=%s chunk_count=%d "
         "prompt_embeds_shape=%s pooled_prompt_embeds_shape=%s device=%s",
-        tuple(len(ids) for ids in token_ids),
-        tuple(tokenizer.model_max_length for tokenizer in tokenizers),
+        (len(prompt_tokens), len(prompt_tokens_2)),
+        (tokenizer.model_max_length, tokenizer_2.model_max_length),
         chunk_count,
         tuple(conditioning.prompt_embeds.shape),
         tuple(conditioning.pooled_prompt_embeds.shape),
@@ -95,9 +93,9 @@ def _build_token_chunks(
     chunk_count: int,
 ) -> list[list[int]]:
     payload_length = _chunk_payload_length(tokenizer)
-    payloads = [token_ids[offset : offset + payload_length] for offset in range(0, len(token_ids), payload_length)] or [
-        []
-    ]
+    payloads = [token_ids[offset : offset + payload_length] for offset in range(0, len(token_ids), payload_length)]
+    if not payloads:
+        payloads.append([])
     payloads.extend([[] for _ in range(chunk_count - len(payloads))])
 
     return [
@@ -117,7 +115,8 @@ def _encode_token_chunks(
     text_encoder: Any,
     chunks: list[list[int]],
     device: str,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
+    return_pooled: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
     input_ids = torch.tensor(chunks, dtype=torch.long, device=device)
     encoder_output = text_encoder(input_ids, output_hidden_states=True)
     hidden_states = encoder_output.hidden_states[-2]
@@ -126,6 +125,9 @@ def _encode_token_chunks(
         hidden_states.shape[0] * hidden_states.shape[1],
         hidden_states.shape[2],
     )
+    if not return_pooled:
+        return prompt_embeds
+
     # SDXL uses the pooled output from the final text encoder.
     pooled_prompt_embeds = encoder_output[0][:1] if encoder_output[0].ndim == 2 else None
     return prompt_embeds, pooled_prompt_embeds
