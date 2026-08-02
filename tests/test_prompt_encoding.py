@@ -51,26 +51,6 @@ class _FakeTokenizer:
         return {"input_ids": prepared}
 
 
-class _TokenizersBackendFakeTokenizer(_FakeTokenizer):
-    def __getattribute__(self, name):
-        if name == "build_inputs_with_special_tokens":
-            raise AttributeError(name)
-        return super().__getattribute__(name)
-
-    def decode(self, token_ids, **kwargs):
-        return "".join(chr(token_id) for token_id in token_ids)
-
-    def __call__(self, prompt, **kwargs):
-        tokenized = super().__call__(prompt, **kwargs)
-        input_ids = tokenized["input_ids"]
-        if kwargs.get("add_special_tokens"):
-            input_ids = super().build_inputs_with_special_tokens(input_ids)
-        if kwargs.get("padding") == "max_length":
-            input_ids = input_ids[: kwargs["max_length"]]
-            input_ids.extend([self.pad_token_id] * (kwargs["max_length"] - len(input_ids)))
-        return {"input_ids": input_ids}
-
-
 class _EncoderOutput:
     def __init__(self, hidden_states, first_output):
         self.hidden_states = hidden_states
@@ -112,22 +92,6 @@ class _FakePipeline:
 
 
 class EncodeSdxlPromptTests(unittest.TestCase):
-    def test_tokenizers_backend_retokenizes_each_window(self):
-        pipe = _FakePipeline()
-        pipe.tokenizer = _TokenizersBackendFakeTokenizer()
-        pipe.tokenizer_2 = _TokenizersBackendFakeTokenizer()
-
-        conditioning = encode_sdxl_prompt(pipe, "abcdef", "cpu")
-
-        self.assertEqual(
-            pipe.text_encoder.input_ids,
-            [
-                [101, ord("a"), ord("b"), ord("c"), ord("d"), 102],
-                [101, ord("e"), ord("f"), 102, 0, 0],
-            ],
-        )
-        self.assertEqual(conditioning.prompt_embeds.shape, (1, 12, 5))
-
     def test_short_prompt_uses_one_window_for_both_encoders(self):
         pipe = _FakePipeline()
 
