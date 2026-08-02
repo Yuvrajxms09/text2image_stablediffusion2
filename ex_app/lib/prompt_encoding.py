@@ -1,4 +1,4 @@
-"""Build SDXL prompt embeddings without truncating long prompts."""
+"""Encode SDXL prompts in tokenizer-sized chunks."""
 
 import logging
 from dataclasses import dataclass
@@ -126,5 +126,6 @@ def _encode_token_chunks(
         hidden_states.shape[0] * hidden_states.shape[1],
         hidden_states.shape[2],
     )
+    # SDXL uses the pooled output from the final text encoder.
     pooled_prompt_embeds = encoder_output[0][:1] if encoder_output[0].ndim == 2 else None
     return prompt_embeds, pooled_prompt_embeds

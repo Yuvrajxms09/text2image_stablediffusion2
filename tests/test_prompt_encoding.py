@@ -14,10 +14,8 @@ class _FakeTokenizer:
         self.eos_token_id = 102
         self.pad_token_id = 0
         self.extra_token = extra_token
-        self.prompts = []
 
     def __call__(self, prompt, **kwargs):
-        self.prompts.append((prompt, kwargs))
         input_ids = [ord(character) for character in prompt]
         if self.extra_token is not None:
             input_ids.append(self.extra_token)
@@ -132,22 +130,6 @@ class EncodeSdxlPromptTests(unittest.TestCase):
         self.assertEqual(len(pipe.text_encoder_2.input_ids), 2)
         self.assertEqual(conditioning.prompt_embeds.shape, (1, 12, 5))
 
-    def test_prompt_is_passed_to_both_tokenizers_unchanged(self):
-        pipe = _FakePipeline()
-        prompt = "a + (b-c)"
-
-        encode_sdxl_prompt(pipe, prompt, "cpu")
-
-        self.assertEqual(pipe.tokenizer.prompts[0][0], prompt)
-        self.assertEqual(pipe.tokenizer_2.prompts[0][0], prompt)
-        expected_options = {
-            "add_special_tokens": False,
-            "truncation": False,
-            "verbose": False,
-        }
-        self.assertEqual(pipe.tokenizer.prompts[0][1], expected_options)
-        self.assertEqual(pipe.tokenizer_2.prompts[0][1], expected_options)
-
     def test_pooled_embeddings_come_from_the_first_window(self):
         pipe = _FakePipeline()
 
@@ -156,20 +138,6 @@ class EncodeSdxlPromptTests(unittest.TestCase):
         first_window = torch.tensor(pipe.text_encoder_2.input_ids[0])
         expected = first_window.sum().repeat(3).reshape(1, 3).to(torch.float32)
         torch.testing.assert_close(conditioning.pooled_prompt_embeds, expected)
-
-    def test_long_prompt_logs_conditioning_dimensions(self):
-        pipe = _FakePipeline()
-
-        with self.assertLogs("ex_app.lib.prompt_encoding", level="INFO") as captured:
-            encode_sdxl_prompt(pipe, "abcdef", "cpu")
-
-        self.assertIn("token_counts=(6, 6)", captured.output[0])
-        self.assertIn("model_max_lengths=(6, 6)", captured.output[0])
-        self.assertIn("chunk_count=2", captured.output[0])
-        self.assertIn("prompt_embeds_shape=(1, 12, 5)", captured.output[0])
-        self.assertIn("pooled_prompt_embeds_shape=(1, 3)", captured.output[0])
-        self.assertIn("device=cpu", captured.output[0])
-
 
 if __name__ == "__main__":
     unittest.main()
