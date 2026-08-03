@@ -223,7 +223,18 @@ def background_thread_task():
             width = int(width)
             height = int(height)
             inference_steps = int(os.getenv('NUM_INFERENCE_STEPS', 4))
+            logger.info(
+                "PROMPT_ENCODING_DEBUG task_id=%s prompt_chars=%d preparing SDXL embeddings",
+                task.get('id'),
+                len(prompt),
+            )
             conditioning = encode_sdxl_prompt(pipe, prompt, device)
+            logger.info(
+                "PROMPT_ENCODING_DEBUG task_id=%s passing prompt_embeds=%s pooled_prompt_embeds=%s to pipeline",
+                task.get('id'),
+                tuple(conditioning.prompt_embeds.shape),
+                tuple(conditioning.pooled_prompt_embeds.shape),
+            )
             images: List[PIL.Image.Image] = pipe(
                 width=width,
                 height=height,
@@ -235,6 +246,11 @@ def background_thread_task():
                 callback_on_step_end=lambda diffusion, step, timestep, _, **kwargs:
                     NextcloudApp().providers.task_processing.set_progress(task.get('id'), (step+1) / inference_steps * (100 - progress) + progress)
             ).images
+            logger.info(
+                "PROMPT_ENCODING_DEBUG task_id=%s pipeline_returned_images=%d",
+                task.get('id'),
+                len(images),
+            )
             log(nc, LogLvl.INFO, f"image generated: {perf_counter() - time_start}s")
 
             img_ids = []

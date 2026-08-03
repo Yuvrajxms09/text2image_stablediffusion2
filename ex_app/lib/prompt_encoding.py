@@ -18,17 +18,31 @@ class PromptConditioning:
 
 @torch.no_grad()
 def encode_sdxl_prompt(pipe: Any, prompt: str, device: str) -> PromptConditioning:
+    logger.info("PROMPT_ENCODING_DEBUG prompt_chars=%d device=%s", len(prompt), device)
     tokenizer = pipe.tokenizer
     tokenizer_2 = pipe.tokenizer_2
     prompt_tokens = _tokenize_prompt(tokenizer, prompt)
     prompt_tokens_2 = _tokenize_prompt(tokenizer_2, prompt)
+    logger.info(
+        "PROMPT_ENCODING_DEBUG token_counts=(%d, %d) model_max_lengths=(%d, %d)",
+        len(prompt_tokens),
+        len(prompt_tokens_2),
+        tokenizer.model_max_length,
+        tokenizer_2.model_max_length,
+    )
     chunk_count = max(
         _required_chunk_count(tokenizer, prompt_tokens),
         _required_chunk_count(tokenizer_2, prompt_tokens_2),
     )
+    logger.info("PROMPT_ENCODING_DEBUG chunk_count=%d", chunk_count)
 
     first_chunks = _build_token_chunks(tokenizer, prompt_tokens, chunk_count)
     second_chunks = _build_token_chunks(tokenizer_2, prompt_tokens_2, chunk_count)
+    logger.info(
+        "PROMPT_ENCODING_DEBUG chunk_shapes=(%s, %s)",
+        tuple(len(chunk) for chunk in first_chunks),
+        tuple(len(chunk) for chunk in second_chunks),
+    )
     first_prompt_embeds = _encode_token_chunks(
         pipe.text_encoder,
         first_chunks,
@@ -61,6 +75,11 @@ def encode_sdxl_prompt(pipe: Any, prompt: str, device: str) -> PromptConditionin
         tuple(conditioning.pooled_prompt_embeds.shape),
         device,
     )
+    logger.info(
+        "PROMPT_ENCODING_DEBUG final_prompt_embeds=%s final_pooled_prompt_embeds=%s",
+        tuple(conditioning.prompt_embeds.shape),
+        tuple(conditioning.pooled_prompt_embeds.shape),
+    )
     return conditioning
 
 
@@ -71,7 +90,15 @@ def _tokenize_prompt(tokenizer: Any, prompt: str) -> list[int]:
         truncation=False,
         verbose=False,
     )
-    return tokenized["input_ids"]
+    token_ids = tokenized["input_ids"]
+    logger.info(
+        "PROMPT_ENCODING_DEBUG tokenizer=%s token_count=%d token_preview=%s token_tail=%s",
+        type(tokenizer).__name__,
+        len(token_ids),
+        token_ids[:8],
+        token_ids[-8:],
+    )
+    return token_ids
 
 
 def _required_chunk_count(tokenizer: Any, token_ids: list[int]) -> int:
@@ -97,6 +124,12 @@ def _build_token_chunks(
     if not payloads:
         payloads.append([])
     payloads.extend([[] for _ in range(chunk_count - len(payloads))])
+    logger.info(
+        "PROMPT_ENCODING_DEBUG prepared_payloads tokenizer=%s payload_count=%d payload_lengths=%s",
+        type(tokenizer).__name__,
+        len(payloads),
+        tuple(len(payload) for payload in payloads),
+    )
 
     return [
         tokenizer.prepare_for_model(
@@ -118,16 +151,39 @@ def _encode_token_chunks(
     return_pooled: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
     input_ids = torch.tensor(chunks, dtype=torch.long, device=device)
+    logger.info(
+        "PROMPT_ENCODING_DEBUG encoder=%s input_ids_shape=%s dtype=%s device=%s",
+        type(text_encoder).__name__,
+        tuple(input_ids.shape),
+        input_ids.dtype,
+        input_ids.device,
+    )
     encoder_output = text_encoder(input_ids, output_hidden_states=True)
     hidden_states = encoder_output.hidden_states[-2]
+    logger.info(
+        "PROMPT_ENCODING_DEBUG encoder=%s hidden_states_shape=%s",
+        type(text_encoder).__name__,
+        tuple(hidden_states.shape),
+    )
     prompt_embeds = hidden_states.reshape(
         1,
         hidden_states.shape[0] * hidden_states.shape[1],
         hidden_states.shape[2],
     )
     if not return_pooled:
+        logger.info(
+            "PROMPT_ENCODING_DEBUG encoder=%s prompt_embeds_shape=%s pooled=not_requested",
+            type(text_encoder).__name__,
+            tuple(prompt_embeds.shape),
+        )
         return prompt_embeds
 
     # SDXL uses the pooled output from the final text encoder.
     pooled_prompt_embeds = encoder_output[0][:1] if encoder_output[0].ndim == 2 else None
+    logger.info(
+        "PROMPT_ENCODING_DEBUG encoder=%s prompt_embeds_shape=%s pooled_shape=%s",
+        type(text_encoder).__name__,
+        tuple(prompt_embeds.shape),
+        None if pooled_prompt_embeds is None else tuple(pooled_prompt_embeds.shape),
+    )
     return prompt_embeds, pooled_prompt_embeds
